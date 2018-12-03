@@ -17,6 +17,7 @@ from enum import IntEnum, auto
 #    +1 range on EXPLORING, fix no move bug, strip mine
 # v7 Third Fib for ship cost hike, stop shipbuilding when HOMING, HOMING sooner because more ships,
 #    Dropoffs, progressively deeper extraction
+# v8 Fix log crash, smaller create delay, lower dropoffoverhead
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -35,7 +36,7 @@ useSaboteurs = False
 homing_begun = False
 dropoffthisframe = False
 reservedfordropoff = 0
-dropoffcostoverhead = 1.25
+dropoffcostoverhead = 1.1
 createshipturn = 0
 ship_status = {}
 
@@ -113,6 +114,7 @@ def ConvertToDropoff(ship, me, costtillnow, map):
 #
 
 def GetClosestStoragePosition(position, me, map):
+    storageindex = -1
     min = map.calculate_distance(ship.position, me.shipyard.position)
     pos = me.shipyard.position
     for dropoff in me.get_dropoffs():
@@ -120,15 +122,16 @@ def GetClosestStoragePosition(position, me, map):
         if (dist <= min):
             min = dist
             pos = dropoff.position
+            storageindex = dropoff.id
         #
-    #    
+    #
     return pos
 #
 
 # This game object contains the initial game state 
 game = hlt.Game()
 # Respond with your name.
-game.ready("DeepCv7")
+game.ready("DeepCv8")
 
 while True:
     # Get the latest game state.
@@ -280,10 +283,9 @@ while True:
     # If you're on the first turn and have enough halite, spawn a ship.
     # Don't spawn a ship if you currently have a ship at port, though.
     #if game.turn_number <= 1 or (me.halite_amount >= GetShipBuildThreshold(int(numships/2)) and game.turn_number < int(constants.MAX_TURNS*0.6) and not game_map[me.shipyard].is_occupied):
-    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(0.7*numships))) and ((game.turn_number - createshipturn) > 4) and not homing_begun and not game_map[me.shipyard].is_occupied):
+    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(0.7*numships))) and ((game.turn_number - createshipturn) > 2) and not homing_begun and not game_map[me.shipyard].is_occupied):
         command_queue.append(game.me.shipyard.spawn())
         createshipturn = game.turn_number
-        logging.info("Ship Created: {}", game.turn_number)
     #
     
     # Send your moves back to the game environment, ending this turn.
