@@ -18,7 +18,8 @@ from enum import IntEnum, auto
 # v7 Third Fib for ship cost hike, stop shipbuilding when HOMING, HOMING sooner because more ships,
 #    Dropoffs, progressively deeper extraction
 # v8 Fix log crash, smaller create delay, lower dropoffoverhead
-# v9 dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
+# v9 Dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
+#v10 Two-third fib, extract more
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -38,7 +39,7 @@ useSaboteurs = False
 homing_begun = False
 dropoffthisframe = False
 reservedfordropoff = 0
-dropoffcostoverhead = 1.2
+dropoffcostoverhead = 1.25
 createshipturn = 0
 ship_status = {}
 
@@ -133,7 +134,7 @@ def GetClosestStoragePosition(position, me, map):
 # This game object contains the initial game state 
 game = hlt.Game()
 # Respond with your name.
-game.ready("DeepCv9")
+game.ready("DeepCv10")
 
 while True:
     # Get the latest game state.
@@ -142,7 +143,7 @@ while True:
     me = game.me
     game_map = game.game_map
     
-    extractionratio = 15 + ( int(game.turn_number/100) * 5 )
+    extractionratio = 25 + ( int(game.turn_number/100) * 5 )
     
     # A command queue holds all the commands you will run this turn.
     command_queue = []
@@ -295,7 +296,7 @@ while True:
     # If you're on the first turn and have enough halite, spawn a ship.
     # Don't spawn a ship if you currently have a ship at port, though.
     #if game.turn_number <= 1 or (me.halite_amount >= GetShipBuildThreshold(int(numships/2)) and game.turn_number < int(constants.MAX_TURNS*0.6) and not game_map[me.shipyard].is_occupied):
-    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(0.7*numships))) and ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not homing_begun and not game_map[me.shipyard].is_occupied):
+    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(0.67*numships))) and ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not homing_begun and not game_map[me.shipyard].is_occupied):
         command_queue.append(game.me.shipyard.spawn())
         createshipturn = game.turn_number
     #
