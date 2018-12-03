@@ -18,11 +18,13 @@ from enum import IntEnum, auto
 # v7 Third Fib for ship cost hike, stop shipbuilding when HOMING, HOMING sooner because more ships,
 #    Dropoffs, progressively deeper extraction
 # v8 Fix log crash, smaller create delay, lower dropoffoverhead
+# v9 dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
 
 class shipInfo(IntEnum):
     STATE = 0
     GOAL = auto()
     LASTPOS = auto()
+    PAUSE = auto()
 #
 
 class shipState(IntEnum):
@@ -36,7 +38,7 @@ useSaboteurs = False
 homing_begun = False
 dropoffthisframe = False
 reservedfordropoff = 0
-dropoffcostoverhead = 1.1
+dropoffcostoverhead = 1.2
 createshipturn = 0
 ship_status = {}
 
@@ -106,7 +108,7 @@ def ConvertToDropoff(ship, me, costtillnow, map):
             far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 3)
         #
         if far_enough:
-            dropoffpos = GetRichestPosition( ship.position, 4, False, True, map )
+            dropoffpos = GetRichestPosition( ship.position, 2, False, True, map )
             return True, dropoffpos
         #
     #
@@ -131,7 +133,7 @@ def GetClosestStoragePosition(position, me, map):
 # This game object contains the initial game state 
 game = hlt.Game()
 # Respond with your name.
-game.ready("DeepCv8")
+game.ready("DeepCv9")
 
 while True:
     # Get the latest game state.
@@ -151,13 +153,14 @@ while True:
     returning = 0
     for ship in me.get_ships():
         if ship.id not in ship_status:
-            ship_status[ship.id] = [shipState.RETURNING, ship.position, ship.position]
+            ship_status[ship.id] = [shipState.RETURNING, ship.position, ship.position, False]
         elif ship_status[ship.id][shipInfo.STATE] == shipState.RETURNING:
-            if ship.position == ship_status[ship.id][shipInfo.LASTPOS]:
+            if ship.position == ship_status[ship.id][shipInfo.LASTPOS] and not ship_status[ship.id][shipInfo.PAUSE]: 
                 ship_status[ship.id][shipInfo.STATE] = shipState.EXPLORING
                 ship_status[ship.id][shipInfo.GOAL] = None
                 exploring += 1
             else:
+                ship_status[ship.id][shipInfo.PAUSE] = not ship_status[ship.id][shipInfo.PAUSE]
                 returning += 1
             #
         elif ship_status[ship.id][shipInfo.STATE] == shipState.EXPLORING:
@@ -201,15 +204,20 @@ while True:
                 best = GetRichestPosition( ship.position, int(game.turn_number/100), True, False, game_map )
                 if game_map.calculate_distance(ship.position, best) > 1:
                     ship_status[ship.id][shipInfo.GOAL] = best
+                else:
+                    ship_status[ship.id][shipInfo.GOAL] = None
                 #
                 costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                 move = game_map.naive_navigate(ship, best)
                 command_queue.append(ship.move(move))
-                #logging.info("Ship {} Goal {} Move {}".format(ship.id, best, move))
+                #logging.info("Ship {} Storage {} Goal {} Distance {} Move {}".format(ship.id, ship.position, best, game_map.calculate_distance(ship.position, best), move))
             else:
-                costthisturn += int(game_map[ship.position].halite_amount * 0.1)
-                move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
-                command_queue.append(ship.move(move))
+                if game_map[ship.position].halite_amount == 0 or not ship_status[ship.id][shipInfo.PAUSE]:
+                    costthisturn += int(game_map[ship.position].halite_amount * 0.1)
+                    move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
+                    command_queue.append(ship.move(move))
+                else:
+                    command_queue.append(ship.stay_still())                #
             #
         elif ship_status[ship.id][shipInfo.STATE] == shipState.HOMING:
             if game_map.calculate_distance(ship.position, ship_status[ship.id][shipInfo.GOAL]) == 1:
@@ -246,6 +254,7 @@ while True:
                     dropoffthisturn = True
                 else:
                     ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
+                    ship_status[ship.id][shipInfo.PAUSE] = False
                     ship_status[ship.id][shipInfo.GOAL] = GetClosestStoragePosition(ship.position, me, game_map)
                     costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                     move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
@@ -253,6 +262,7 @@ while True:
                 #
             elif (ship.halite_amount > int(constants.MAX_HALITE * 0.5) and returning < numdropoffs+2):
                 ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
+                ship_status[ship.id][shipInfo.PAUSE] = False
                 ship_status[ship.id][shipInfo.GOAL] = GetClosestStoragePosition(ship.position, me, game_map)
                 costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                 move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
@@ -270,6 +280,8 @@ while True:
                 best = GetRichestPosition( ship.position, 1, False, False, game_map )
                 if game_map.calculate_distance(ship.position, best) > 1:
                     ship_status[ship.id][shipInfo.GOAL] = best
+                else:
+                    ship_status[ship.id][shipInfo.GOAL] = None
                 #
                 costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                 move = game_map.naive_navigate(ship, best)
@@ -283,7 +295,7 @@ while True:
     # If you're on the first turn and have enough halite, spawn a ship.
     # Don't spawn a ship if you currently have a ship at port, though.
     #if game.turn_number <= 1 or (me.halite_amount >= GetShipBuildThreshold(int(numships/2)) and game.turn_number < int(constants.MAX_TURNS*0.6) and not game_map[me.shipyard].is_occupied):
-    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(0.7*numships))) and ((game.turn_number - createshipturn) > 2) and not homing_begun and not game_map[me.shipyard].is_occupied):
+    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(0.7*numships))) and ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not homing_begun and not game_map[me.shipyard].is_occupied):
         command_queue.append(game.me.shipyard.spawn())
         createshipturn = game.turn_number
     #
