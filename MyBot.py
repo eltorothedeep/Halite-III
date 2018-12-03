@@ -8,18 +8,19 @@ import random
 import logging
 from enum import IntEnum, auto
 
-# v1 base bot 
-# v2 better movement
-# v3 goal based movement
-# v4 stuck resolution
-# v5 Fib based ship cost, no limit, no delay, return when closer to full
-# v6 Homing at end, start with RETURNING, EXPLORE range increase over game after RETURNING, 
-#    +1 range on EXPLORING, fix no move bug, strip mine
-# v7 Third Fib for ship cost hike, stop shipbuilding when HOMING, HOMING sooner because more ships,
-#    Dropoffs, progressively deeper extraction
-# v8 Fix log crash, smaller create delay, lower dropoffoverhead
-# v9 Dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
-#v10 Two-third fib, extract more
+# v1  base bot 
+# v2  better movement
+# v3  goal based movement
+# v4  stuck resolution
+# v5  Fib based ship cost, no limit, no delay, return when closer to full
+# v6  Homing at end, start with RETURNING, EXPLORE range increase over game after RETURNING, 
+#     +1 range on EXPLORING, fix no move bug, strip mine
+# v7  Third Fib for ship cost hike, stop shipbuilding when HOMING, HOMING sooner because more ships,
+#     Dropoffs, progressively deeper extraction
+# v8  Fix log crash, smaller create delay, lower dropoffoverhead
+# v9  Dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
+# v10 Two-third fib, extract more, 
+# v11 must move if no halite
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -134,7 +135,7 @@ def GetClosestStoragePosition(position, me, map):
 # This game object contains the initial game state 
 game = hlt.Game()
 # Respond with your name.
-game.ready("DeepCv10")
+game.ready("DeepCv11")
 
 while True:
     # Get the latest game state.
@@ -278,7 +279,7 @@ while True:
                     command_queue.append(ship.move(move))            
                 #
             elif game_map[ship.position].halite_amount < constants.MAX_HALITE / extractionratio:
-                best = GetRichestPosition( ship.position, 1, False, False, game_map )
+                best = GetRichestPosition( ship.position, 1, game_map[ship.position].halite_amount==0, False, game_map )
                 if game_map.calculate_distance(ship.position, best) > 1:
                     ship_status[ship.id][shipInfo.GOAL] = best
                 else:
