@@ -6,6 +6,7 @@ from hlt import constants
 
 import random
 import logging
+import copy
 from enum import IntEnum, auto
 
 # v1  base bot 
@@ -21,12 +22,14 @@ from enum import IntEnum, auto
 # v9  Dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
 # v10 Two-third fib, extract more, 
 # v11 must move if no halite
+# v12 radial explore, return more full, don't pause if too little halite
 
 class shipInfo(IntEnum):
     STATE = 0
     GOAL = auto()
     LASTPOS = auto()
     PAUSE = auto()
+    DROPID = auto()
 #
 
 class shipState(IntEnum):
@@ -36,13 +39,19 @@ class shipState(IntEnum):
     HOMING = auto()
 #
 
+class dropInfo(IntEnum):
+    RADIAL = 0
+#
+
 useSaboteurs = False
 homing_begun = False
 dropoffthisframe = False
 reservedfordropoff = 0
 dropoffcostoverhead = 1.25
 createshipturn = 0
+radial = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]]
 ship_status = {}
+dropoff_status = {}
 
 def fibbing(n):
     if n == 0:
@@ -118,7 +127,7 @@ def ConvertToDropoff(ship, me, costtillnow, map):
 #
 
 def GetClosestStoragePosition(position, me, map):
-    storageindex = -1
+    storageindex = 0
     min = map.calculate_distance(ship.position, me.shipyard.position)
     pos = me.shipyard.position
     for dropoff in me.get_dropoffs():
@@ -129,7 +138,23 @@ def GetClosestStoragePosition(position, me, map):
             storageindex = dropoff.id
         #
     #
-    return pos
+    return pos,storageindex
+#
+
+def GetRadialExplorePos( pos, dropid ):
+    global radial
+    global dropoff_status
+    if dropid not in dropoff_status:
+        dropoff_status[dropid] = 0
+    #
+    mul = 1+int(dropoff_status[dropid]/8)
+    idx = dropoff_status[dropid] % 8
+    offset = radial[idx]
+    radpos = copy.deepcopy(pos)
+    radpos.x += offset[0]*mul
+    radpos.y += offset[1]*mul
+    dropoff_status[dropid] += 1
+    return radpos
 #
 
 # This game object contains the initial game state 
@@ -145,6 +170,7 @@ while True:
     game_map = game.game_map
     
     extractionratio = 25 + ( int(game.turn_number/100) * 5 )
+    min_halite = constants.MAX_HALITE / extractionratio
     
     # A command queue holds all the commands you will run this turn.
     command_queue = []
@@ -155,7 +181,7 @@ while True:
     returning = 0
     for ship in me.get_ships():
         if ship.id not in ship_status:
-            ship_status[ship.id] = [shipState.RETURNING, ship.position, ship.position, False]
+            ship_status[ship.id] = [shipState.RETURNING, ship.position, ship.position, False, 0]
         elif ship_status[ship.id][shipInfo.STATE] == shipState.RETURNING:
             if ship.position == ship_status[ship.id][shipInfo.LASTPOS] and not ship_status[ship.id][shipInfo.PAUSE]: 
                 ship_status[ship.id][shipInfo.STATE] = shipState.EXPLORING
@@ -174,7 +200,7 @@ while True:
         if ship_status[ship.id][shipInfo.STATE] != shipState.HOMING:
             turns_left = constants.MAX_TURNS - game.turn_number
             if turns_left < 100:
-                storage = GetClosestStoragePosition(ship.position, me, game_map)
+                storage, id = GetClosestStoragePosition(ship.position, me, game_map)
                 distance = game_map.calculate_distance(ship.position, storage)
                 if (distance * 2.5) > turns_left:
                     if ship_status[ship.id][shipInfo.STATE] == shipState.EXPLORING:
@@ -203,7 +229,11 @@ while True:
         if ship_status[ship.id][shipInfo.STATE] == shipState.RETURNING:
             if ship.position == ship_status[ship.id][shipInfo.GOAL]:
                 ship_status[ship.id][shipInfo.STATE] = shipState.EXPLORING
-                best = GetRichestPosition( ship.position, int(game.turn_number/100), True, False, game_map )
+                if False:
+                    best = GetRichestPosition( ship.position, int(game.turn_number/100), True, False, game_map )
+                else:
+                    best = game_map.normalize(GetRadialExplorePos(ship.position, ship_status[ship.id][shipInfo.DROPID]))
+                #
                 if game_map.calculate_distance(ship.position, best) > 1:
                     ship_status[ship.id][shipInfo.GOAL] = best
                 else:
@@ -214,7 +244,7 @@ while True:
                 command_queue.append(ship.move(move))
                 #logging.info("Ship {} Storage {} Goal {} Distance {} Move {}".format(ship.id, ship.position, best, game_map.calculate_distance(ship.position, best), move))
             else:
-                if game_map[ship.position].halite_amount == 0 or not ship_status[ship.id][shipInfo.PAUSE]:
+                if game_map[ship.position].halite_amount < min_halite or not ship_status[ship.id][shipInfo.PAUSE]:
                     costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                     move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
                     command_queue.append(ship.move(move))
@@ -257,7 +287,7 @@ while True:
                 else:
                     ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
                     ship_status[ship.id][shipInfo.PAUSE] = False
-                    ship_status[ship.id][shipInfo.GOAL] = GetClosestStoragePosition(ship.position, me, game_map)
+                    ship_status[ship.id][shipInfo.GOAL], ship_status[ship.id][shipInfo.DROPID] = GetClosestStoragePosition(ship.position, me, game_map)
                     costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                     move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
                     command_queue.append(ship.move(move))
@@ -265,7 +295,7 @@ while True:
             elif (ship.halite_amount > int(constants.MAX_HALITE * 0.5) and returning < numdropoffs+2):
                 ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
                 ship_status[ship.id][shipInfo.PAUSE] = False
-                ship_status[ship.id][shipInfo.GOAL] = GetClosestStoragePosition(ship.position, me, game_map)
+                ship_status[ship.id][shipInfo.GOAL],ship_status[ship.id][shipInfo.DROPID] = GetClosestStoragePosition(ship.position, me, game_map)
                 costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                 move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
                 command_queue.append(ship.move(move))
@@ -278,7 +308,7 @@ while True:
                     move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
                     command_queue.append(ship.move(move))            
                 #
-            elif game_map[ship.position].halite_amount < constants.MAX_HALITE / extractionratio:
+            elif game_map[ship.position].halite_amount < min_halite:
                 best = GetRichestPosition( ship.position, 1, game_map[ship.position].halite_amount==0, False, game_map )
                 if game_map.calculate_distance(ship.position, best) > 1:
                     ship_status[ship.id][shipInfo.GOAL] = best
