@@ -22,7 +22,7 @@ from enum import IntEnum, auto
 # v9  Dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
 # v10 Two-third fib, extract more, 
 # v11 must move if no halite
-# v12 radial explore, return more full, don't pause if too little halite
+# v12 radial explore, don't pause if too little halite, limit to 1 dropoff for 32x32
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -113,6 +113,9 @@ def GetRichestPosition( curPos, range, mustmove, avoidedges, map ):
 #
 
 def ConvertToDropoff(ship, me, costtillnow, map):
+    if len(me.get_dropoffs()) == 1 and map.height == 32:
+        return False, None
+        
     if len(me.get_ships()) > (1+len(me.get_dropoffs()))*10 and me.halite_amount > constants.DROPOFF_COST + costtillnow:
         far_enough = map.calculate_distance(ship.position, me.shipyard.position) > map.height / 3
         for dropoff in me.get_dropoffs():
@@ -244,7 +247,8 @@ while True:
                 command_queue.append(ship.move(move))
                 #logging.info("Ship {} Storage {} Goal {} Distance {} Move {}".format(ship.id, ship.position, best, game_map.calculate_distance(ship.position, best), move))
             else:
-                if game_map[ship.position].halite_amount < min_halite or not ship_status[ship.id][shipInfo.PAUSE]:
+                if game_map[ship.position].halite_amount < int(min_halite/2) or not ship_status[ship.id][shipInfo.PAUSE]:
+                    ship_status[ship.id][shipInfo.PAUSE] = False
                     costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                     move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
                     command_queue.append(ship.move(move))
