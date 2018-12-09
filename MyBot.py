@@ -22,7 +22,7 @@ from enum import IntEnum, auto
 # v9  Dropoff pos range smaller, Pause every other frame when RETURNING, Fix return to storage bug, limit ship creation to first 80%
 # v10 Two-third fib, extract more, 
 # v11 must move if no halite
-# v12 radial explore, don't pause if too little halite, limit to 1 dropoff for 32x32
+# v12 radial explore, don't pause if too little halite, fix pause/unpause, fibbing ratio by map size
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -52,6 +52,8 @@ createshipturn = 0
 radial = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]]
 ship_status = {}
 dropoff_status = {}
+sizeratio = {32:0.7, 40:0.65, 48:0.6, 56:0.55, 64:0.5}
+
 
 def fibbing(n):
     if n == 0:
@@ -113,9 +115,6 @@ def GetRichestPosition( curPos, range, mustmove, avoidedges, map ):
 #
 
 def ConvertToDropoff(ship, me, costtillnow, map):
-    if len(me.get_dropoffs()) == 1 and map.height == 32:
-        return False, None
-        
     if len(me.get_ships()) > (1+len(me.get_dropoffs()))*10 and me.halite_amount > constants.DROPOFF_COST + costtillnow:
         far_enough = map.calculate_distance(ship.position, me.shipyard.position) > map.height / 3
         for dropoff in me.get_dropoffs():
@@ -163,7 +162,9 @@ def GetRadialExplorePos( pos, dropid ):
 # This game object contains the initial game state 
 game = hlt.Game()
 # Respond with your name.
-game.ready("DeepCv11")
+game.ready("DeepCv12")
+
+shipfibratio = sizeratio[game.game_map.height]
 
 while True:
     # Get the latest game state.
@@ -331,7 +332,7 @@ while True:
     # If you're on the first turn and have enough halite, spawn a ship.
     # Don't spawn a ship if you currently have a ship at port, though.
     #if game.turn_number <= 1 or (me.halite_amount >= GetShipBuildThreshold(int(numships/2)) and game.turn_number < int(constants.MAX_TURNS*0.6) and not game_map[me.shipyard].is_occupied):
-    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(0.67*numships))) and ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not homing_begun and not game_map[me.shipyard].is_occupied):
+    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(shipfibratio*numships))) and ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not homing_begun and not game_map[me.shipyard].is_occupied):
         command_queue.append(game.me.shipyard.spawn())
         createshipturn = game.turn_number
     #
