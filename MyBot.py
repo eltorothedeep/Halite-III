@@ -23,7 +23,7 @@ from enum import IntEnum, auto
 # v10 Two-third fib, extract more, 
 # v11 must move if no halite
 # v12 radial explore, don't pause if too little halite, fix pause/unpause, fibbing ratio by map size
-# v13 dropoff fixes - check when converting, dropoff count based on map size, dropoff count also based on average distance(?), more distance between dropoffs, planned_dropoffs
+# v13 dropoff fixes - check when converting, dropoff count based on map size, dropoff count also based on average distance(?), planned_dropoffs
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -124,11 +124,11 @@ def ConvertToDropoff(ship, me, av_storage_dist, map):
         (me.halite_amount > constants.DROPOFF_COST) and (len(me.get_dropoffs()) < sizeratio[map.height][1]):
         far_enough = map.calculate_distance(ship.position, me.shipyard.position) > map.height / 3
         for dropoff in me.get_dropoffs():
-            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 2)
+            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 3)
         #
         for dropoff in planned_dropoffs:
             logging.info("Planned {}".format(dropoff))
-            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff) > map.height / 2)
+            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff) > map.height / 3)
         #
         if far_enough:
             dropoffpos = GetRichestPosition( ship.position, 2, False, True, map )
