@@ -23,6 +23,7 @@ from enum import IntEnum, auto
 # v10 Two-third fib, extract more, 
 # v11 must move if no halite
 # v12 radial explore, don't pause if too little halite, fix pause/unpause, fibbing ratio by map size
+# v13 dropoff fixes - check when converting, dropoff count based on map size, dropoff count also based on average distance(?), more distance between dropoffs, planned_dropoffs
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -47,12 +48,13 @@ useSaboteurs = False
 homing_begun = False
 dropoffthisframe = False
 reservedfordropoff = 0
-dropoffcostoverhead = 1.25
+dropoffcostoverhead = 1
 createshipturn = 0
 radial = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]]
 ship_status = {}
 dropoff_status = {}
-sizeratio = {32:0.7, 40:0.65, 48:0.6, 56:0.55, 64:0.5}
+planned_dropoffs = {}
+sizeratio = {32:[0.7,3], 40:[0.65,3], 48:[0.6,4], 56:[0.55,4], 64:[0.5,5]}
 
 
 def fibbing(n):
@@ -114,14 +116,23 @@ def GetRichestPosition( curPos, range, mustmove, avoidedges, map ):
     return best
 #
 
-def ConvertToDropoff(ship, me, costtillnow, map):
-    if len(me.get_ships()) > (1+len(me.get_dropoffs()))*10 and me.halite_amount > constants.DROPOFF_COST + costtillnow:
+def ConvertToDropoff(ship, me, av_storage_dist, map):
+    global planned_dropoffs
+    
+    #if len(me.get_ships()) > (1+len(me.get_dropoffs()))*10 and me.halite_amount > constants.DROPOFF_COST and len(me.get_dropoffs()) < sizeratio[map.height][1]:
+    if ((av_storage_dist > map.height / 2.5) or len(me.get_ships()) > (1+len(me.get_dropoffs()))*10) and \
+        (me.halite_amount > constants.DROPOFF_COST) and (len(me.get_dropoffs()) < sizeratio[map.height][1]):
         far_enough = map.calculate_distance(ship.position, me.shipyard.position) > map.height / 3
         for dropoff in me.get_dropoffs():
-            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 3)
+            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 2)
+        #
+        for dropoff in planned_dropoffs:
+            logging.info("Planned {}".format(dropoff))
+            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff) > map.height / 2)
         #
         if far_enough:
             dropoffpos = GetRichestPosition( ship.position, 2, False, True, map )
+            planned_dropoffs[ship.id] = dropoffpos
             return True, dropoffpos
         #
     #
@@ -162,9 +173,9 @@ def GetRadialExplorePos( pos, dropid ):
 # This game object contains the initial game state 
 game = hlt.Game()
 # Respond with your name.
-game.ready("DeepCv12")
+game.ready("DeepCv13")
 
-shipfibratio = sizeratio[game.game_map.height]
+shipfibratio = sizeratio[game.game_map.height][0]
 
 while True:
     # Get the latest game state.
@@ -183,6 +194,7 @@ while True:
     numdropoffs = len(me.get_dropoffs())
     exploring = 0
     returning = 0
+    av_storage_dist = 0
     for ship in me.get_ships():
         if ship.id not in ship_status:
             ship_status[ship.id] = [shipState.RETURNING, ship.position, ship.position, False, 0]
@@ -191,6 +203,8 @@ while True:
                 ship_status[ship.id][shipInfo.STATE] = shipState.EXPLORING
                 ship_status[ship.id][shipInfo.GOAL] = None
                 exploring += 1
+                closest, index = GetClosestStoragePosition(ship.position, me, game_map)
+                av_storage_dist += game_map.calculate_distance(ship.position, closest)
             else:
                 ship_status[ship.id][shipInfo.PAUSE] = not ship_status[ship.id][shipInfo.PAUSE]
                 returning += 1
@@ -200,6 +214,8 @@ while True:
             if ship.position == ship_status[ship.id][shipInfo.LASTPOS]:
                 ship_status[ship.id][shipInfo.GOAL] = None
             #
+            closest, index = GetClosestStoragePosition(ship.position, me, game_map)
+            av_storage_dist += game_map.calculate_distance(ship.position, closest)
         #
         if ship_status[ship.id][shipInfo.STATE] != shipState.HOMING:
             turns_left = constants.MAX_TURNS - game.turn_number
@@ -225,7 +241,9 @@ while True:
         ship_status[ship.id][shipInfo.LASTPOS] = ship.position
     #
     #logging.info("PrePro Complete")
-    
+    if exploring > 0:
+        av_storage_dist /= exploring
+    #
     dropoffthisturn = False
     costthisturn = 0
 
@@ -267,8 +285,14 @@ while True:
             #
         elif ship_status[ship.id][shipInfo.STATE] == shipState.CONVERTING:
             if ship.position == ship_status[ship.id][shipInfo.GOAL]:
-                command_queue.append(ship.make_dropoff())
-                reservedfordropoff -= int(constants.DROPOFF_COST * dropoffcostoverhead)
+                if me.halite_amount - costthisturn > int(constants.DROPOFF_COST * dropoffcostoverhead):
+                    command_queue.append(ship.make_dropoff())
+                    del planned_dropoffs[ship.id]
+                    reservedfordropoff -= int(constants.DROPOFF_COST * dropoffcostoverhead)
+                    costthisturn += constants.DROPOFF_COST
+                else:
+                    command_queue.append(ship.stay_still())
+                #
             else:
                 costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                 move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
@@ -279,7 +303,7 @@ while True:
                 convert = False
                 dropoffpos = ship.position
                 if not dropoffthisturn:
-                    convert, dropoffpos = ConvertToDropoff(ship, me, costthisturn, game_map)
+                    convert, dropoffpos = ConvertToDropoff(ship, me, av_storage_dist, game_map)
                 #
                 if convert:
                     ship_status[ship.id][shipInfo.STATE] = shipState.CONVERTING
@@ -332,7 +356,10 @@ while True:
     # If you're on the first turn and have enough halite, spawn a ship.
     # Don't spawn a ship if you currently have a ship at port, though.
     #if game.turn_number <= 1 or (me.halite_amount >= GetShipBuildThreshold(int(numships/2)) and game.turn_number < int(constants.MAX_TURNS*0.6) and not game_map[me.shipyard].is_occupied):
-    if game.turn_number <= 1 or ((me.halite_amount >= GetShipBuildThreshold(int(shipfibratio*numships))) and ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not homing_begun and not game_map[me.shipyard].is_occupied):
+    if game.turn_number <= 1 or \
+        ((me.halite_amount >= GetShipBuildThreshold(int(shipfibratio*numships))) and \
+        ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not \
+        homing_begun and not game_map[me.shipyard].is_occupied):
         command_queue.append(game.me.shipyard.spawn())
         createshipturn = game.turn_number
     #
