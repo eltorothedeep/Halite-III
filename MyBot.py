@@ -24,7 +24,7 @@ from enum import IntEnum, auto
 # v11 must move if no halite
 # v12 radial explore, don't pause if too little halite, fix pause/unpause, fibbing ratio by map size
 # v13 dropoff fixes - check when converting, dropoff count based on map size, dropoff count also based on average distance(?), planned_dropoffs
-# v14 here and near ship switch for dropoff, radial+richest on leaving storage
+# v14 here and near ship switch for dropoff, 10% dropoff overhead, one less dropoff for 32x32, closer average distance for conversion
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -51,7 +51,7 @@ useSaboteurs = False
 homing_begun = False
 dropoffthisframe = False
 reservedfordropoff = 0
-dropoffcostoverhead = 1.25
+dropoffcostoverhead = 1.1
 createshipturn = 0
 radial = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]]
 ship_status = {}
@@ -123,14 +123,14 @@ def ConvertToDropoff(ship, me, av_storage_dist, map):
     global planned_dropoffs
     
     #if len(me.get_ships()) > (1+len(me.get_dropoffs()))*10 and me.halite_amount > constants.DROPOFF_COST and len(me.get_dropoffs()) < sizeratio[map.height][1]:
-    if ((av_storage_dist > map.height / 2.5) or len(me.get_ships()) > (1+len(me.get_dropoffs()))*10) and \
+    if ((av_storage_dist > map.height / 3) or len(me.get_ships()) > (1+len(me.get_dropoffs()))*10) and \
         (me.halite_amount > int(constants.DROPOFF_COST * dropoffcostoverhead)) and (len(me.get_dropoffs()) < sizeratio[map.height][1]):
         far_enough = map.calculate_distance(ship.position, me.shipyard.position) > map.height / 3
         for dropoff in me.get_dropoffs():
             far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 3)
         #
         for dropoff, position in planned_dropoffs.items():
-            logging.info("Planned {}".format(dropoff))
+            #logging.info("Planned {}".format(dropoff))
             far_enough = far_enough and (map.calculate_distance(ship.position, position) > map.height / 3)
         #
         if far_enough:
@@ -187,7 +187,7 @@ while True:
     me = game.me
     game_map = game.game_map
     
-    extractionratio = 50 + ( int(game.turn_number/100) * 5 )
+    extractionratio = 25 + ( int(game.turn_number/100) * 5 )
     min_halite = constants.MAX_HALITE / extractionratio
     
     # A command queue holds all the commands you will run this turn.
@@ -259,8 +259,9 @@ while True:
                 #else:
                 #    best = game_map.normalize(GetRadialExplorePos(ship.position, ship_status[ship.id][shipInfo.DROPID]))
                 #
-                radialpos = game_map.normalize(GetRadialExplorePos(ship.position, ship_status[ship.id][shipInfo.DROPID]))
-                best = GetRichestPosition( radialpos, 1, True, False, game_map )
+                #radialpos = game_map.normalize(GetRadialExplorePos(ship.position, ship_status[ship.id][shipInfo.DROPID]))
+                #best = GetRichestPosition( radialpos, 1, True, False, game_map )
+                best = game_map.normalize(GetRadialExplorePos(ship.position, ship_status[ship.id][shipInfo.DROPID]))
                 ship_status[ship.id][shipInfo.GOAL] = best
                 costthisturn += int(game_map[ship.position].halite_amount * 0.1)
                 if ship_status[ship.id][shipInfo.DROPID] not in dropoff_status:
