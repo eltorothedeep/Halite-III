@@ -25,6 +25,7 @@ from enum import IntEnum, auto
 # v12 radial explore, don't pause if too little halite, fix pause/unpause, fibbing ratio by map size
 # v13 dropoff fixes - check when converting, dropoff count based on map size, dropoff count also based on average distance(?), planned_dropoffs
 # v14 here and near ship switch for dropoff, 10% dropoff overhead, one less dropoff for 32x32, closer average distance for conversion
+# v15 Metrics (shipfib, max_dropoff) based on map size + player count, return with smaller loads as game progresses, kamikaze enemy ships on dropoffs
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -57,7 +58,15 @@ radial = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]]
 ship_status = {}
 dropoff_status = {}
 planned_dropoffs = {}
-sizeratio = {32:[0.7,2], 40:[0.65,3], 48:[0.6,4], 56:[0.55,4], 64:[0.5,5]}
+sizeratio2 = {
+    32:{2:[0.67,2], 4:[0.75,1]}, 
+    40:{2:[0.60,3], 4:[0.67,1]}, 
+    48:{2:[0.40,4], 4:[0.50,2]}, 
+    56:{2:[0.33,4], 4:[0.40,2]}, 
+    64:{2:[0.25,5], 4:[0.33,3]}
+}
+max_dropoffs = 1
+
 
 
 def fibbing(n):
@@ -121,10 +130,12 @@ def GetRichestPosition( curPos, range, mustmove, avoidedges, map ):
 
 def ConvertToDropoff(ship, me, av_storage_dist, map):
     global planned_dropoffs
+    global max_dropoffs
     
     #if len(me.get_ships()) > (1+len(me.get_dropoffs()))*10 and me.halite_amount > constants.DROPOFF_COST and len(me.get_dropoffs()) < sizeratio[map.height][1]:
+    #if (len(me.get_ships()) > (1+len(me.get_dropoffs()))*10) and \
     if ((av_storage_dist > map.height / 3) or len(me.get_ships()) > (1+len(me.get_dropoffs()))*10) and \
-        (me.halite_amount > int(constants.DROPOFF_COST * dropoffcostoverhead)) and (len(me.get_dropoffs()) < sizeratio[map.height][1]):
+        (me.halite_amount > int(constants.DROPOFF_COST * dropoffcostoverhead)) and (len(me.get_dropoffs()) + len(planned_dropoffs) < max_dropoffs):
         far_enough = map.calculate_distance(ship.position, me.shipyard.position) > map.height / 3
         for dropoff in me.get_dropoffs():
             far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 3)
@@ -178,7 +189,9 @@ game = hlt.Game()
 # Respond with your name.
 game.ready("DeepCv14")
 
-shipfibratio = sizeratio[game.game_map.height][0]
+#shipfibratio = sizeratio[game.game_map.height][0]
+shipfibratio = sizeratio2[game.game_map.height][len(game.players)][0]
+max_dropoffs = sizeratio2[game.game_map.height][len(game.players)][1]
 
 while True:
     # Get the latest game state.
@@ -189,6 +202,9 @@ while True:
     
     extractionratio = 25 + ( int(game.turn_number/100) * 5 )
     min_halite = constants.MAX_HALITE / extractionratio
+    
+    #return_threshold = int( constants.MAX_HALITE * ( ( constants.MAX_TURNS - game.turn_number ) / (constants.MAX_TURNS*2) ) )
+    return_threshold = int(constants.MAX_HALITE * (0.5-(0.25*game.turn_number/constants.MAX_TURNS)))
     
     # A command queue holds all the commands you will run this turn.
     command_queue = []
@@ -249,6 +265,8 @@ while True:
     #
     dropoffthisturn = False
     costthisturn = 0
+    
+    ship_near_shipyard = False
 
     for ship in me.get_ships():        
         if ship_status[ship.id][shipInfo.STATE] == shipState.RETURNING:
@@ -277,6 +295,9 @@ while True:
                 #
                 if dropoff_status[ship_status[ship.id][shipInfo.DROPID]][dropInfo.SHIP_NEAR] == None:
                     dropoff_status[ship_status[ship.id][shipInfo.DROPID]][dropInfo.SHIP_NEAR] = ship.id
+                    if ship_status[ship.id][shipInfo.DROPID] == 0:
+                        ship_near_shipyard = True
+                    #
                 else:
                     ship_status[ship.id][shipInfo.PAUSE] = True
                     command_queue.append(ship.stay_still())
@@ -338,7 +359,7 @@ while True:
                     move = game_map.naive_navigate(ship, ship_status[ship.id][shipInfo.GOAL])
                     command_queue.append(ship.move(move))
                 #
-            elif (ship.halite_amount > int(constants.MAX_HALITE * 0.5) and returning < numdropoffs+2):
+            elif (ship.halite_amount > return_threshold and returning < numdropoffs+2):
                 ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
                 ship_status[ship.id][shipInfo.PAUSE] = False
                 ship_status[ship.id][shipInfo.GOAL],ship_status[ship.id][shipInfo.DROPID] = GetClosestStoragePosition(ship.position, me, game_map)
@@ -385,11 +406,25 @@ while True:
             ship_here = me.get_ship(ship_here_id)
             move = game_map.naive_navigate(ship_here, ship_status[ship_here_id][shipInfo.GOAL])
             command_queue.append(ship_here.move(move))
-            #logging.info("Ship {} Goal {} Move {}".format(ship_here_id, ship_status[ship_here_id][shipInfo.GOAL], move))
+            #if move.x == 0 and move.y == 0:
+            #    logging.info("Ship {} Position {} Goal {} Move {}".format(ship_here_id, ship_here.position, ship_status[ship_here_id][shipInfo.GOAL], move))
+            #    ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
+            #    ship_status[ship.id][shipInfo.PAUSE] = False
+            #else:
+            ##   
         elif ship_near_id:
             ship_near = me.get_ship(ship_near_id)
-            move = game_map.naive_navigate(ship_near, ship_status[ship_near_id][shipInfo.GOAL])
-            command_queue.append(ship_near.move(move))
+            dropoff_cell = game_map[ship_status[ship_near_id][shipInfo.GOAL]]
+            if dropoff_cell.is_occupied and \
+                dropoff_cell.ship.owner is not me:
+                # kamikaze dropoff squatter
+                to_dropoff = game_map.get_unsafe_moves(ship_near.position, ship_status[ship_near_id][shipInfo.GOAL])
+                command_queue.append(ship_near.move(to_dropoff[0]))
+            else:
+                # move in carefully
+                move = game_map.naive_navigate(ship_near, ship_status[ship_near_id][shipInfo.GOAL])
+                command_queue.append(ship_near.move(move))
+            #
         #
         info[dropInfo.SHIP_HERE] = None
         info[dropInfo.SHIP_NEAR] = None
@@ -400,8 +435,10 @@ while True:
     #if game.turn_number <= 1 or (me.halite_amount >= GetShipBuildThreshold(int(numships/2)) and game.turn_number < int(constants.MAX_TURNS*0.6) and not game_map[me.shipyard].is_occupied):
     if game.turn_number <= 1 or \
         ((me.halite_amount >= GetShipBuildThreshold(int(shipfibratio*numships))) and \
-        ((game.turn_number - createshipturn) > 2) and game.turn_number < int(constants.MAX_TURNS*0.8) and not \
-        homing_begun and not game_map[me.shipyard].is_occupied):
+        ((game.turn_number - createshipturn) > 2) and \
+        game.turn_number < int(constants.MAX_TURNS*0.8) and not \
+        homing_begun and not \
+        game_map[me.shipyard].is_occupied) and not ship_near_shipyard:
         command_queue.append(game.me.shipyard.spawn())
         createshipturn = game.turn_number
     #
