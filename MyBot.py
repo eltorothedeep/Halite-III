@@ -28,6 +28,7 @@ from enum import IntEnum, auto
 # v15 Metrics (shipfib, max_dropoff) based on map size + player count, return with smaller loads as game progresses, kamikaze enemy ships on dropoffs, 
 #     fix for ships stalled on dropoff
 # v16 Better nav to avoid self collisions, better radial org, don't kamikaze self on dropoffs
+# v17 Fewer ships, better dropoff selection, don't try to move if you don't have enough halite, no SideStep in HOMING
 
 class shipInfo(IntEnum):
     STATE = 0
@@ -51,6 +52,7 @@ class dropInfo(IntEnum):
     SHIP_NEAR = auto()
 #
 
+log_dropoffs = False
 verbose = False
 useSaboteurs = False
 homing_begun = False
@@ -70,8 +72,7 @@ sizeratio2 = {
     64:{2:[0.25,5], 4:[0.40,3]}
 }
 max_dropoffs = 1
-
-
+average_halite_ratio = 0
 
 def fibbing(n):
     if n == 0:
@@ -93,19 +94,40 @@ def GetShipBuildThreshold(num):
     return int(constants.SHIP_COST * (1+(GetFib(fibbing, num)/100))) + reservedfordropoff
 #    
 
-def IsAtEdgeOfMap( position, map ):
-    if (position.x == 0 or position.x == map.width-1 or position.y == 0 or position.y == map.height-1 ):
+def IsAtEdgeOfMap(position, map):
+    if (position.x == 0 or position.x == map.width-1 or position.y == 0 or position.y == map.height-1):
         return True
     #
     return False
 #
 
-def PositionToNavIndex( position, the_map ):
+def PositionToNavIndex(position, the_map):
     norm = the_map.normalize(position)
     return (norm.x * the_map.width + norm.y)
 #
 
-def GetRichestPosition( curPos, range, mustmove, avoidedges, map ):
+def GetHaliteRichness(curPos, range, the_map):
+    max_halite = 0
+    cur_halite = 0
+    range *= 4
+    adList = curPos.get_surrounding_cardinals()
+    for adjacent in adList:
+        if range > 0:
+            for ad1 in adjacent.get_surrounding_cardinals():
+                adList.append(the_map.normalize(ad1))
+            #
+            range -= 1
+        #
+        cur_halite += the_map[adjacent].halite_amount
+        max_halite += constants.MAX_HALITE
+    #
+    if log_dropoffs:
+        logging.info("Test {} CurHalite {} MaxHalite {} Ratio {}".format(curPos, cur_halite, max_halite, cur_halite/max_halite))
+    #
+    return cur_halite / max_halite
+#
+
+def GetRichestPosition(curPos, range, mustmove, avoidedges, map):
     global nav_plan
     
     first = mustmove
@@ -120,7 +142,7 @@ def GetRichestPosition( curPos, range, mustmove, avoidedges, map ):
             #
             range -= 1
         #
-        nav_idx = PositionToNavIndex( adjacent, map )
+        nav_idx = PositionToNavIndex(adjacent, map)
         if map[adjacent].is_empty and not nav_idx in nav_plan and \
             ((first and map[adjacent].halite_amount >= max) or (map[adjacent].halite_amount > max)):
             
@@ -144,24 +166,50 @@ def GetRichestPosition( curPos, range, mustmove, avoidedges, map ):
 def ConvertToDropoff(ship, me, av_storage_dist, map):
     global planned_dropoffs
     global max_dropoffs
+    global average_halite_ratio
     
-    if ((av_storage_dist > map.height / 3) or len(me.get_ships()) > (1+len(me.get_dropoffs()))*10) and \
+    if log_dropoffs:
+        d_count = len(me.get_dropoffs()) + len(planned_dropoffs)
+        logging.info("Num Ships {} Avg Dist {} Halite {} Dropoffs {} AV Halite {}".format(numships, av_storage_dist, me.halite_amount, d_count, average_halite_ratio))
+    #    
+    
+    min_distance = map.height / 4
+    if ((av_storage_dist > min_distance) or len(me.get_ships()) > (1+len(me.get_dropoffs()))*10) and \
         (me.halite_amount > int(constants.DROPOFF_COST * dropoffcostoverhead)) and \
-        (len(me.get_dropoffs()) + len(planned_dropoffs) < max_dropoffs):
+        (len(me.get_dropoffs()) + len(planned_dropoffs) < max_dropoffs) and \
+        (GetHaliteRichness(ship.position, 3, map) >= average_halite_ratio):
         
-        far_enough = map.calculate_distance(ship.position, me.shipyard.position) > map.height / 3
+        distance = map.calculate_distance(ship.position, me.shipyard.position)
+        if log_dropoffs:
+            logging.info("Base conditions met - checking for distance")
+            logging.info("Shipyard Distance {}".format(distance))
+        #    
+        far_enough = distance >= min_distance
         for dropoff in me.get_dropoffs():
-            far_enough = far_enough and (map.calculate_distance(ship.position, dropoff.position) > map.height / 3)
+            distance = map.calculate_distance(ship.position, dropoff.position)
+            if log_dropoffs:
+                logging.info("Dropoff {} Distance {}".format(dropoff.id, distance))
+            #    
+            far_enough = far_enough and (distance >= min_distance)
         #
         for dropoff, position in planned_dropoffs.items():
-            #logging.info("Planned {}".format(dropoff))
-            far_enough = far_enough and (map.calculate_distance(ship.position, position) > map.height / 3)
+            distance = map.calculate_distance(ship.position, position)
+            if log_dropoffs:
+                logging.info("Planned Dropoff {} Distance {}".format(dropoff, distance))
+            #    
+            far_enough = far_enough and (distance >= min_distance)
         #
         if far_enough:
-            dropoffpos = GetRichestPosition( ship.position, 2, False, True, map )
+            dropoffpos = GetRichestPosition(ship.position, 2, False, True, map)
             planned_dropoffs[ship.id] = dropoffpos
+            if log_dropoffs:
+                logging.info("Dropoff Approved")
+            #    
             return True, dropoffpos
         #
+    #
+    if log_dropoffs:
+        logging.info("Dropoff Denied")
     #
     return False, None    
 #
@@ -181,7 +229,7 @@ def GetClosestStoragePosition(position, me, map):
     return pos,storageindex
 #
 
-def GetRadialExplorePos( pos, dropid ):
+def GetRadialExplorePos(pos, dropid):
     global radial
     global dropoff_status
     if dropid not in dropoff_status:
@@ -243,7 +291,7 @@ def SideStepShip(the_ship, the_map, command_buffer):
     	
         # add the command
         moves = the_map.get_unsafe_moves(the_ship.position, adjacent)
-        logging.info("Current {} Goal {} Same {} Moves {}".format(the_ship.position, adjacent, (the_ship.position==adjacent), moves))
+        #logging.info("Current {} Goal {} Same {} Moves {}".format(the_ship.position, adjacent, (the_ship.position==adjacent), moves))
         command_buffer.append(the_ship.move(moves[0]))
 
         if verbose:
@@ -259,6 +307,7 @@ def NavigateShip(the_ship, the_map, command_buffer):
     global ship_status
     global nav_plan
     global verbose
+    global homing_begun
 	
     if verbose:
         logging.info("Ship {} Navigating".format(the_ship.id))
@@ -276,7 +325,7 @@ def NavigateShip(the_ship, the_map, command_buffer):
     nav_idx = PositionToNavIndex(newpos, the_map)
     if newpos == the_ship.position or nav_idx in nav_plan:
         # check if ship can side step
-        if not SideStepShip(the_ship, the_map, command_buffer):
+        if homing_begun or not SideStepShip(the_ship, the_map, command_buffer):
             # Pause if nowhere to go
             PauseShip(the_ship, the_map, command_buffer)
             return False, 0
@@ -304,6 +353,21 @@ game.ready("DeepCv16")
 
 shipfibratio = sizeratio2[game.game_map.height][len(game.players)][0]
 max_dropoffs = sizeratio2[game.game_map.height][len(game.players)][1]
+map_width = game.game_map.width
+map_height = game.game_map.height
+
+num_samples = 0
+log_dropoffs = False
+for r in range(0, map_width, int(map_width/8)):
+    for c in range(0, map_height, int(map_height/8)):
+        cur_pos = hlt.Position(r,c)
+        average_halite_ratio += GetHaliteRichness(cur_pos, 4, game.game_map)
+        num_samples += 1
+    #
+#
+logging.info("sum {} num {} avg {}".format(average_halite_ratio, num_samples, average_halite_ratio/num_samples))
+average_halite_ratio /= num_samples
+log_dropoffs = False
 
 while True:
     # Get the latest game state.
@@ -316,7 +380,7 @@ while True:
     nav_plan.clear()
 
     # setup parameters for this turn    
-    extractionratio = 25 + ( int(game.turn_number/100) * 5 )
+    extractionratio = 25 + (int(game.turn_number/100) * 5)
     min_halite = constants.MAX_HALITE / extractionratio
     return_threshold = int(constants.MAX_HALITE * 0.5) #int(constants.MAX_HALITE * (0.5-(0.25*game.turn_number/constants.MAX_TURNS)))
     
@@ -409,18 +473,20 @@ while True:
     costthisturn = 0
     
     ship_near_shipyard = False
-
+    
     if verbose:
         logging.info("MAIN-PASS")
     #
-    for ship in me.get_ships():        
-        if ship_status[ship.id][shipInfo.STATE] == shipState.RETURNING:
+    for ship in me.get_ships():
+        if ship.halite_amount < int(game_map[ship.position].halite_amount * 0.15):
+            PauseShip(ship, game_map, command_queue)
+        elif ship_status[ship.id][shipInfo.STATE] == shipState.RETURNING:
             if verbose:
                 logging.info("Ship {} RETURNING".format(ship.id))
             #
             if ship.position == ship_status[ship.id][shipInfo.GOAL]:
                 ship_status[ship.id][shipInfo.STATE] = shipState.EXPLORING
-                #ship_status[ship.id][shipInfo.GOAL] = GetRichestPosition( ship.position, 1, True, False, game_map )
+                #ship_status[ship.id][shipInfo.GOAL] = GetRichestPosition(ship.position, 1, True, False, game_map)
                 ship_status[ship.id][shipInfo.GOAL] = game_map.normalize(GetRadialExplorePos(ship.position, ship_status[ship.id][shipInfo.DROPID]))
                 if ship_status[ship.id][shipInfo.DROPID] not in dropoff_status:
                     dropoff_status[ship_status[ship.id][shipInfo.DROPID]] = [0, None, None]
@@ -507,9 +573,9 @@ while True:
             if verbose:
                 logging.info("Ship {} EXPLORING".format(ship.id))
             #
-            if ship.is_full:
+            if ship.is_full or (ship.halite_amount > return_threshold and returning < numdropoffs+2):
                 if verbose:
-                    logging.info("Ship {} EXPLORING - full".format(ship.id))
+                    logging.info("Ship {} EXPLORING - full[enough]".format(ship.id))
                 #
                 convert = False
                 dropoffpos = ship.position
@@ -535,15 +601,14 @@ while True:
                         logging.info("Ship {} EXPLORING - switching to RETURNING".format(ship.id))
                     #
                 #
-            elif (ship.halite_amount > return_threshold and returning < numdropoffs+2):
-                ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
-                ship_status[ship.id][shipInfo.PAUSE] = False
-                ship_status[ship.id][shipInfo.GOAL],ship_status[ship.id][shipInfo.DROPID] = GetClosestStoragePosition(ship.position, me, game_map)
-                #success, cost = NavigateShip(ship, game_map, command_queue)
-                #costthisturn += cost
-                if verbose:
-                    logging.info("Ship {} EXPLORING - full enough, switching to RETURNING".format(ship.id))
-                #
+            #elif (ship.halite_amount > return_threshold and returning < numdropoffs+2):
+            #    ship_status[ship.id][shipInfo.STATE] = shipState.RETURNING
+            #    ship_status[ship.id][shipInfo.GOAL],ship_status[ship.id][shipInfo.DROPID] = GetClosestStoragePosition(ship.position, me, game_map)
+            #    #success, cost = NavigateShip(ship, game_map, command_queue)
+            #     #costthisturn += cost
+            #    if verbose:
+            #        logging.info("Ship {} EXPLORING - full enough, switching to RETURNING".format(ship.id))
+            #    #
             elif ship_status[ship.id][shipInfo.GOAL] is not None:
                 if ship_status[ship.id][shipInfo.GOAL] == ship.position:
                     ship_status[ship.id][shipInfo.GOAL] = None
@@ -559,7 +624,7 @@ while True:
                 #    #
                 #
             elif game_map[ship.position].halite_amount < min_halite:
-                ship_status[ship.id][shipInfo.GOAL] = GetRichestPosition( ship.position, 1, game_map[ship.position].halite_amount==0, False, game_map )
+                ship_status[ship.id][shipInfo.GOAL] = GetRichestPosition(ship.position, 1, game_map[ship.position].halite_amount==0, False, game_map)
                 #success, cost = NavigateShip(ship, game_map, command_queue)
                 #costthisturn += cost
                 if verbose:
@@ -577,7 +642,7 @@ while True:
     for id, info in dropoff_status.items():
         ship_here_id = info[dropInfo.SHIP_HERE]
         ship_near_id = info[dropInfo.SHIP_NEAR]
-        logging.info("Dropoff {} Ship Here {} Near {} ".format(id, ship_here_id, ship_near_id))
+        #logging.info("Dropoff {} Ship Here {} Near {} ".format(id, ship_here_id, ship_near_id))
         if ship_here_id and ship_near_id:
             ship_here = me.get_ship(ship_here_id)
             ship_near = me.get_ship(ship_near_id)
@@ -587,13 +652,13 @@ while True:
             to_here = game_map.get_unsafe_moves(ship_near.position, ship_here.position)
             UpdateNavPlan(ship_near, game_map, ship_here.position)
             command_queue.append(ship_near.move(to_here[0]))
-            logging.info("Ship Here & Near switched")
+            #logging.info("Ship Here & Near switched")
         elif ship_here_id:
             ship_here = me.get_ship(ship_here_id)
             success, cost = NavigateShip(ship_here, game_map, command_queue)
             costthisturn += cost
             if not success:
-                logging.info("Ship Here Stalled")
+                #logging.info("Ship Here Stalled")
                 ship_status[ship_here_id][shipInfo.STATE] = shipState.RETURNING
                 ship_status[ship_here_id][shipInfo.GOAL] = ship_here.position
                 ship_status[ship_here_id][shipInfo.PAUSE] = False
@@ -604,7 +669,7 @@ while True:
             dropoff_cell = game_map[ship_status[ship_near_id][shipInfo.GOAL]]
             if dropoff_cell.is_occupied and dropoff_cell.ship.owner != me.id:
                 # kamikaze dropoff squatter
-                logging.info("KAMIKAZE: Ship {} Position {} Goal {} Owner {} Me {}".format(ship_near_id, ship_near.position, ship_status[ship_near_id][shipInfo.GOAL], dropoff_cell.ship.owner, me))
+                #logging.info("KAMIKAZE: Ship {} Position {} Goal {} Owner {} Me {}".format(ship_near_id, ship_near.position, ship_status[ship_near_id][shipInfo.GOAL], dropoff_cell.ship.owner, me))
                 to_dropoff = game_map.get_unsafe_moves(ship_near.position, ship_status[ship_near_id][shipInfo.GOAL])
                 UpdateNavPlan(ship_near, game_map, ship_status[ship_near_id][shipInfo.GOAL])
                 command_queue.append(ship_near.move(to_dropoff[0]))
@@ -612,7 +677,7 @@ while True:
                 # move in carefully
                 success, cost = NavigateShip(ship_near, game_map, command_queue)
                 costthisturn += cost
-                logging.info("Ship Near Moved")
+                #logging.info("Ship Near Moved")
             #
         #
         info[dropInfo.SHIP_HERE] = None
@@ -627,7 +692,7 @@ while True:
             if verbose:
                 logging.info("Ship {} moving".format(ship.id))
             #
-            success, cost = NavigateShip( ship, game_map, command_queue)
+            success, cost = NavigateShip(ship, game_map, command_queue)
             costthisturn += cost
         #
     #
